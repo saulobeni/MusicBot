@@ -1,0 +1,13 @@
+services:
+  bot:
+    build: .
+    ports:
+      - 8000:5000
+    container_name: music_bot
+    volumes:
+      - .:/app
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+    dns:
+      - 8.8.8.8
+    command: mix run --no-halt

@@ -8,7 +8,7 @@ defmodule MusicBot.Application do
   @impl true
   def start(_type, _args) do
     children = [
-      {MusicBot, []}
+      MusicBot
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html

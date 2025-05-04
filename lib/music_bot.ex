@@ -11,23 +11,45 @@ defmodule MusicBot do
     end
   end
 
-  def handle_event(_event) do
-    :noop
-  end
-
   defp process_command(msg) do
-    command = String.slice(msg.content, 1..-1//-1) |> String.split(" ") |> hd()
+    command =
+      msg.content
+      |> String.slice(1..-1//1)
+      |> String.split(" ")
+      |> hd()
+
     args = String.split(msg.content, " ") |> tl()
 
     case command do
-      "lyrics" -> Commands.get_lyrics(msg, args)
-      "artist" -> Commands.get_artist_info(msg, args)
-      "recommend" -> Commands.get_recommendations(msg, args)
-      "playlist" -> Commands.generate_playlist(msg, args)
-      "song" -> Commands.get_song_info(msg, args)
-      "genre" -> Commands.get_genre_info(msg, args)
-      "cover" -> Commands.get_album_cover(msg, args)
-      _ -> Message.create(msg.channel_id, "Comando desconhecido. Comandos disponíveis: !lyrics, !artist, !recommend, !playlist, !song, !genre, !cover")
+      "lyrics" ->
+        Commands.get_lyrics(msg, args)
+
+      "artist" ->
+        Commands.get_artist_info(msg, args)
+
+      "recommend" ->
+        Commands.get_recommendations(msg, args)
+
+      "playlist" ->
+        Commands.generate_playlist(msg, args)
+
+      "song" ->
+        Commands.get_song_info(msg, args)
+
+      "genre" ->
+        Commands.get_genre_info(msg, args)
+
+      "cover" ->
+        Commands.get_album_cover(msg, args)
+
+      "search" ->
+        Commands.search_song(msg, args)
+
+      _ ->
+        Message.create(
+          msg.channel_id,
+          "Comando desconhecido. Comandos disponíveis: !lyrics, !artist, !recommend, !playlist, !song, !genre, !cover, !search"
+        )
     end
   end
 end
