@@ -9,7 +9,7 @@ defmodule MusicBot.Commands do
   @artist_api "https://musicbrainz.org/ws/2/artist"
   @genre_api "https://binaryjazz.us/wp-json/genrenator/v1/genre/"
   @recommend_api "https://tastedive.com/api/similar"
-
+  @recent_music "https://api.spotify.com/v1/browse/new-releases"
   @song_api "https://api.songkick.com/api/3.0/search/artists.json"
 
   @spec get_spotify_token() :: {:error, :token_error} | {:ok, any()}
@@ -157,8 +157,11 @@ defmodule MusicBot.Commands do
   @doc """
   Obtém recomendações de música baseadas em um artista/gênero usando Deezer API
   """
-  def get_recommendations(msg, [query]) do
-    encoded_query = URI.encode(query)
+  def get_recommendations(msg, [query | rest]) do
+    # Concatenar todos os elementos de 'query' em uma única string
+    query_string = Enum.join([query | rest], " ")
+
+    encoded_query = URI.encode(query_string)
     api_key = "1050254-musicbot-3C1DCF88"
 
     url = "#{@recommend_api}?q=#{encoded_query}&type=music&info=1&limit=10&k=#{api_key}"
@@ -186,11 +189,11 @@ defmodule MusicBot.Commands do
 
             Api.Message.create(
               msg.channel_id,
-              "**Recomendações para `#{query}`**:\n\n#{Enum.join(formatted, "\n\n")}"
+              "**Recomendações para `#{query_string}`**:\n\n#{Enum.join(formatted, "\n\n")}"
             )
 
           {:ok, _} ->
-            Api.Message.create(msg.channel_id, "Nenhuma recomendação encontrada para `#{query}`.")
+            Api.Message.create(msg.channel_id, "Nenhuma recomendação encontrada para `#{query_string}`.")
 
           {:error, decode_error} ->
             Logger.error("Erro ao decodificar JSON: #{inspect(decode_error)}")
@@ -207,44 +210,55 @@ defmodule MusicBot.Commands do
     end
   end
 
+
   @doc """
   Gera uma playlist baseada em uma consulta usando Spotify API
   """
-  def generate_playlist(msg, [category]) do
+  def generate_recennt_musics(msg) do
     case get_spotify_token() do
       {:ok, token} ->
-        category = URI.encode(category)
-        url = "https://api.spotify.com/v1/browse/categories/#{category}/playlists"
+        IO.inspect(token)
+        url = @recent_music
         headers = [{"Authorization", "Bearer #{token}"}]
 
         case HTTPoison.get(url, headers) do
           {:ok, %HTTPoison.Response{status_code: 200, body: body}} ->
             # Decodificando o corpo da resposta
-            playlists_data = Jason.decode!(body)["playlists"]["items"]
+            albums_data = Jason.decode!(body)["albums"]["items"]
+
+            # Pegando os 5 primeiros álbuns
+            albums_data = Enum.take(albums_data, 5)
 
             response =
-              Enum.map(playlists_data, fn playlist ->
-                # Para cada playlist, extraímos as informações de nome, URL e número de faixas
-                name = playlist["name"]
-                external_url = playlist["external_urls"]["spotify"]
-                track_count = playlist["tracks"]["total"]
-                image_url = List.first(playlist["images"])["url"] || "No image available"
+              Enum.map(albums_data, fn album ->
+                # Extraindo as informações necessárias
+                name = album["name"]
+                external_url = album["external_urls"]["spotify"]
+                artist = List.first(album["artists"])["name"]
+                release_date = album["release_date"]
 
-                "[#{name}](#{external_url}) - #{track_count} músicas\nImagem: #{image_url}"
+                image_url =
+                  if Enum.empty?(album["images"]),
+                    do: "No image available",
+                    else: List.first(album["images"])["url"]
+
+                track_count = album["total_tracks"]
+
+                "[#{name}](#{external_url}) - Artista: #{artist} - Lançado em: #{release_date} - #{track_count} músicas\nImagem: #{image_url}"
               end)
 
             Api.Message.create(
               msg.channel_id,
-              "**Playlists encontradas para a categoria #{category}**:\n\n#{Enum.join(response, "\n\n")}"
+              "**Novos lançamentos**:\n\n#{Enum.join(response, "\n\n")}"
             )
 
           {:ok, %HTTPoison.Response{status_code: code}} ->
-            Logger.error("Erro ao buscar playlists: status #{code}")
-            Api.Message.create(msg.channel_id, "Erro ao buscar playlists (status #{code})")
+            Logger.error("Erro ao buscar lançamentos: status #{code}")
+            Api.Message.create(msg.channel_id, "Erro ao buscar lançamentos (status #{code})")
 
           {:error, error} ->
             Logger.error("Erro na requisição: #{inspect(error)}")
-            Api.Message.create(msg.channel_id, "Erro ao buscar playlists")
+            Api.Message.create(msg.channel_id, "Erro ao buscar lançamentos")
         end
 
       {:error, _} ->

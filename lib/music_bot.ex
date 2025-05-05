@@ -30,8 +30,8 @@ defmodule MusicBot do
       "recommend" ->
         Commands.get_recommendations(msg, args)
 
-      "playlist" ->
-        Commands.generate_playlist(msg, args)
+      "lasts" ->
+        Commands.generate_recennt_musics(msg)
 
       "song" ->
         Commands.get_song_info(msg, args)
