@@ -6,11 +6,11 @@ defmodule MusicBot.Commands do
   @lyrics_api "https://api.lyrics.ovh/v1/"
   @deezer_search_api "https://api.deezer.com/search?q="
   @cover_api "https://itunes.apple.com/search"
-
-  @artist_api "https://musicbrainz.org/ws/2/artist/"
-  @recommend_api "https://api.deezer.com/radio/%s"
-  @song_api "https://api.songkick.com/api/3.0/search/artists.json"
+  @artist_api "https://musicbrainz.org/ws/2/artist"
   @genre_api "https://binaryjazz.us/wp-json/genrenator/v1/genre/"
+  @recommend_api "https://tastedive.com/api/similar"
+
+  @song_api "https://api.songkick.com/api/3.0/search/artists.json"
 
   @spec get_spotify_token() :: {:error, :token_error} | {:ok, any()}
   def get_spotify_token() do
@@ -76,6 +76,8 @@ defmodule MusicBot.Commands do
   def get_artist_info(msg, name_parts) do
     artist_name = Enum.join(name_parts, " ") |> URI.encode()
     url = "#{@artist_api}?query=#{artist_name}&fmt=json"
+
+    IO.inspect(url)
 
     case HTTPoison.get(url, [], follow_redirect: true) do
       {:ok, %HTTPoison.Response{status_code: 200, body: body}} ->
@@ -152,80 +154,103 @@ defmodule MusicBot.Commands do
     end
   end
 
-
   @doc """
   Obtém recomendações de música baseadas em um artista/gênero usando Deezer API
   """
   def get_recommendations(msg, [query]) do
-    query = URI.encode(query)
+    encoded_query = URI.encode(query)
+    api_key = "1050254-musicbot-3C1DCF88"
 
-    case HTTPoison.get("#{@recommend_api}#{query}") do
+    url = "#{@recommend_api}?q=#{encoded_query}&type=music&info=1&limit=10&k=#{api_key}"
+
+    case HTTPoison.get(url) do
       {:ok, %HTTPoison.Response{status_code: 200, body: body}} ->
-        data = Jason.decode!(body)
+        case Jason.decode(body) do
+          {:ok, %{"similar" => %{"results" => results}}}
+          when is_list(results) and results != [] ->
+            IO.inspect(results)
+            formatted =
+              Enum.map(results, fn %{
+                                     "name" => name,
+                                     "wUrl" => wiki,
+                                     "yUrl" => yt,
+                                     "description" => desc
+                                   } ->
+                """
+                🎵 **#{name}**
+                📝 #{desc || "Sem descrição."}
+                📖 [Wikipedia](#{wiki || "#"})
+                ▶️ [YouTube](#{yt || "#"})
+                """
+              end)
 
-        tracks =
-          Enum.map(data["data"], fn track ->
-            "#{track["title"]} - #{track["artist"]["name"]}"
-          end)
+            Api.Message.create(
+              msg.channel_id,
+              "**Recomendações para `#{query}`**:\n\n#{Enum.join(formatted, "\n\n")}"
+            )
 
-        Api.Message.create(
-          msg.channel_id,
-          "**Recomendações para #{query}**:\n\n#{Enum.join(tracks, "\n")}"
-        )
+          {:ok, _} ->
+            Api.Message.create(msg.channel_id, "Nenhuma recomendação encontrada para `#{query}`.")
+
+          {:error, decode_error} ->
+            Logger.error("Erro ao decodificar JSON: #{inspect(decode_error)}")
+            Api.Message.create(msg.channel_id, "Erro ao processar resposta da API.")
+        end
+
+      {:ok, %HTTPoison.Response{status_code: code, body: body}} ->
+        Logger.error("API retornou erro #{code}: #{body}")
+        Api.Message.create(msg.channel_id, "Erro na API (status #{code}).")
 
       {:error, error} ->
-        Logger.error("Recommendation API error: #{inspect(error)}")
-        Api.Message.create(msg.channel_id, "Erro ao buscar recomendações")
+        Logger.error("Erro HTTP: #{inspect(error)}")
+        Api.Message.create(msg.channel_id, "Erro ao buscar recomendações.")
     end
   end
 
   @doc """
   Gera uma playlist baseada em uma consulta usando Spotify API
   """
- def generate_playlist(msg, [category]) do
-  case get_spotify_token() do
-    {:ok, token} ->
-      category = URI.encode(category)
-      url = "https://api.spotify.com/v1/browse/categories/#{category}/playlists"
-      headers = [{"Authorization", "Bearer #{token}"}]
+  def generate_playlist(msg, [category]) do
+    case get_spotify_token() do
+      {:ok, token} ->
+        category = URI.encode(category)
+        url = "https://api.spotify.com/v1/browse/categories/#{category}/playlists"
+        headers = [{"Authorization", "Bearer #{token}"}]
 
-      case HTTPoison.get(url, headers) do
-        {:ok, %HTTPoison.Response{status_code: 200, body: body}} ->
-          # Decodificando o corpo da resposta
-          playlists_data = Jason.decode!(body)["playlists"]["items"]
+        case HTTPoison.get(url, headers) do
+          {:ok, %HTTPoison.Response{status_code: 200, body: body}} ->
+            # Decodificando o corpo da resposta
+            playlists_data = Jason.decode!(body)["playlists"]["items"]
 
-          response =
-            Enum.map(playlists_data, fn playlist ->
-              # Para cada playlist, extraímos as informações de nome, URL e número de faixas
-              name = playlist["name"]
-              external_url = playlist["external_urls"]["spotify"]
-              track_count = playlist["tracks"]["total"]
-              image_url = List.first(playlist["images"])["url"] || "No image available"
+            response =
+              Enum.map(playlists_data, fn playlist ->
+                # Para cada playlist, extraímos as informações de nome, URL e número de faixas
+                name = playlist["name"]
+                external_url = playlist["external_urls"]["spotify"]
+                track_count = playlist["tracks"]["total"]
+                image_url = List.first(playlist["images"])["url"] || "No image available"
 
-              "[#{name}](#{external_url}) - #{track_count} músicas\nImagem: #{image_url}"
-            end)
+                "[#{name}](#{external_url}) - #{track_count} músicas\nImagem: #{image_url}"
+              end)
 
-          Api.Message.create(
-            msg.channel_id,
-            "**Playlists encontradas para a categoria #{category}**:\n\n#{Enum.join(response, "\n\n")}"
-          )
+            Api.Message.create(
+              msg.channel_id,
+              "**Playlists encontradas para a categoria #{category}**:\n\n#{Enum.join(response, "\n\n")}"
+            )
 
-        {:ok, %HTTPoison.Response{status_code: code}} ->
-          Logger.error("Erro ao buscar playlists: status #{code}")
-          Api.Message.create(msg.channel_id, "Erro ao buscar playlists (status #{code})")
+          {:ok, %HTTPoison.Response{status_code: code}} ->
+            Logger.error("Erro ao buscar playlists: status #{code}")
+            Api.Message.create(msg.channel_id, "Erro ao buscar playlists (status #{code})")
 
-        {:error, error} ->
-          Logger.error("Erro na requisição: #{inspect(error)}")
-          Api.Message.create(msg.channel_id, "Erro ao buscar playlists")
-      end
+          {:error, error} ->
+            Logger.error("Erro na requisição: #{inspect(error)}")
+            Api.Message.create(msg.channel_id, "Erro ao buscar playlists")
+        end
 
-    {:error, _} ->
-      Api.Message.create(msg.channel_id, "Erro ao autenticar com o Spotify")
+      {:error, _} ->
+        Api.Message.create(msg.channel_id, "Erro ao autenticar com o Spotify")
+    end
   end
-end
-
-
-
 
   @doc """
   Obtém informações sobre uma música usando Songkick API
@@ -298,7 +323,6 @@ end
         Api.Message.create(msg.channel_id, "Erro ao buscar capa do álbum")
     end
   end
-
 
   @doc """
   Busca músicas pelo nome ou artista usando a API do Deezer
