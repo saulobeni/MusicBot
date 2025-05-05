@@ -10,7 +10,7 @@ defmodule MusicBot.Commands do
   @genre_api "https://binaryjazz.us/wp-json/genrenator/v1/genre/"
   @recommend_api "https://tastedive.com/api/similar"
   @recent_music "https://api.spotify.com/v1/browse/new-releases"
-  @song_api "https://api.songkick.com/api/3.0/search/artists.json"
+  @lastfm_api "https://ws.audioscrobbler.com/2.0"
 
   @spec get_spotify_token() :: {:error, :token_error} | {:ok, any()}
   def get_spotify_token() do
@@ -172,6 +172,7 @@ defmodule MusicBot.Commands do
           {:ok, %{"similar" => %{"results" => results}}}
           when is_list(results) and results != [] ->
             IO.inspect(results)
+
             formatted =
               Enum.map(results, fn %{
                                      "name" => name,
@@ -193,7 +194,10 @@ defmodule MusicBot.Commands do
             )
 
           {:ok, _} ->
-            Api.Message.create(msg.channel_id, "Nenhuma recomendação encontrada para `#{query_string}`.")
+            Api.Message.create(
+              msg.channel_id,
+              "Nenhuma recomendação encontrada para `#{query_string}`."
+            )
 
           {:error, decode_error} ->
             Logger.error("Erro ao decodificar JSON: #{inspect(decode_error)}")
@@ -209,7 +213,6 @@ defmodule MusicBot.Commands do
         Api.Message.create(msg.channel_id, "Erro ao buscar recomendações.")
     end
   end
-
 
   @doc """
   Gera uma playlist baseada em uma consulta usando Spotify API
@@ -269,30 +272,82 @@ defmodule MusicBot.Commands do
   @doc """
   Obtém informações sobre uma música usando Songkick API
   """
-  def get_song_info(msg, [song]) do
-    song = URI.encode(song)
+  def get_song_info(msg, [artist_name, track_name]) do
+    artist = URI.encode(artist_name)
+    track = URI.encode(track_name)
 
-    case HTTPoison.get("#{@song_api}?query=#{song}") do
+    url = "#{@lastfm_api}/?method=track.getInfo&api_key=f6d42348e60b335cf1ea36b9ecacb8a5&artist=#{artist}&track=#{track}&format=json"
+
+    case HTTPoison.get(url) do
       {:ok, %HTTPoison.Response{status_code: 200, body: body}} ->
-        data = Jason.decode!(body)["resultsPage"]["results"]["artist"] |> List.first()
+        case Jason.decode!(body) do
+          %{"track" => track_data} ->
+            # Duração formatada (ms → mm:ss)
+            duration =
+              case Integer.parse(track_data["duration"] || "0") do
+                {ms, _} ->
+                  seconds = div(ms, 1000)
+                  minutes = div(seconds, 60)
+                  rest = rem(seconds, 60)
+                  "#{minutes}:#{String.pad_leading("#{rest}", 2, "0")}"
+                _ -> "Desconhecida"
+              end
 
-        embed = %Embed{
-          title: data["displayName"],
-          url: data["uri"],
-          fields: [
-            %Embed.Field{name: "Seguidores", value: data["stats"]["followers"], inline: true},
-            %Embed.Field{name: "Eventos", value: data["stats"]["eventCount"], inline: true}
-          ]
-        }
+            # Imagem extralarge (álbum)
+            image_url =
+              case get_in(track_data, ["album", "image"]) do
+                images when is_list(images) ->
+                  case Enum.find(images, fn img -> img["size"] == "extralarge" end) do
+                    %{"#text" => url} -> url
+                    _ -> ""
+                  end
+                _ -> ""
+              end
 
-        Api.Message.create(msg.channel_id, embed: embed)
+            # Tags principais (máx 3)
+            tags =
+              case get_in(track_data, ["toptags", "tag"]) do
+                tags when is_list(tags) ->
+                  tags
+                  |> Enum.take(3)
+                  |> Enum.map(& &1["name"])
+                  |> Enum.join(", ")
+                _ -> "N/A"
+              end
+
+            # Descrição (resumo truncado)
+            summary =
+              (track_data["wiki"]["summary"] || "")
+              |> String.replace(~r/<[^>]*>/, "")
+              |> String.split("Read more on Last.fm")
+              |> hd()
+              |> String.trim()
+
+            embed = %Embed{
+              title: "#{track_data["name"]} - #{track_data["artist"]["name"]}",
+              url: track_data["url"],
+              thumbnail: %{url: image_url},
+              description: summary,
+              fields: [
+                %Embed.Field{name: "Álbum", value: track_data["album"]["title"] || "N/A", inline: true},
+                %Embed.Field{name: "Ouvintes", value: track_data["listeners"], inline: true},
+                %Embed.Field{name: "Reproduções", value: track_data["playcount"], inline: true},
+                %Embed.Field{name: "Duração", value: duration, inline: true},
+                %Embed.Field{name: "Tags", value: tags, inline: false}
+              ]
+            }
+
+            Api.Message.create(msg.channel_id, embed: embed)
+
+          _ ->
+            Api.Message.create(msg.channel_id, "Música não encontrada.")
+        end
 
       {:error, error} ->
-        Logger.error("Song API error: #{inspect(error)}")
+        Logger.error("Erro na API do Last.fm: #{inspect(error)}")
         Api.Message.create(msg.channel_id, "Erro ao buscar informações da música")
     end
   end
-
   @doc """
   Gera um gênero musical aleatório usando Genrenator API
   """
